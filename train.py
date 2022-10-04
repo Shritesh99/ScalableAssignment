@@ -48,7 +48,7 @@ class ImageSequence(keras.utils.Sequence):
         self.count = len(file_list)
 
     def __len__(self):
-        return int(numpy.floor(self.count / self.batch_size))
+        return int(numpy.floor(self.count / self.batch_size)) - 1
 
     def __getitem__(self, idx):
         X = numpy.zeros((self.batch_size, self.captcha_height, self.captcha_width, 3), dtype=numpy.float32)
