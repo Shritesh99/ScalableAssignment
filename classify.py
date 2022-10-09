@@ -66,7 +66,7 @@ def main():
                 (c, h, w) = image.shape
                 image = image.reshape([-1, c, h, w])
                 prediction = model.predict(image)
-                output_file.write(x + ", " + decode(captcha_symbols, prediction) + "\n")
+                output_file.write(x + "," + decode(captcha_symbols, prediction) + "\n")
 
                 print('Classified ' + x)
 
