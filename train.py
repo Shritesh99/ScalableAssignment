@@ -120,26 +120,23 @@ class ImageSequence(keras.utils.Sequence):
 
         file_list = os.listdir(self.directory_name)
         self.files = dict(zip(map(lambda x: x.split('.')[0], file_list), file_list))
-        self.used_files = []
         self.count = len(file_list)
         self.cache = [None for _ in range(self.count)]
 
     def __len__(self):
         return self.count
-    def __getitem__(self, idx):
 
+    def __getitem__(self, idx):
+        
         if self.cache[idx] != None:
             return self.cache[idx]
 
-    def __getitem__(self, idx):
         X = numpy.zeros((self.batch_size, self.captcha_width, self.captcha_height, 1), dtype=numpy.float32)
         y = numpy.zeros((self.batch_size, max_len,), dtype=numpy.int64)
 
         for i in range(self.batch_size):
             random_image_label = random.choice(list(self.files.keys()))
             random_image_file = self.files[random_image_label]
-
-            self.used_files.append(self.files.pop(random_image_label))
 
             raw_data = cv2.imread(os.path.join(self.directory_name, random_image_file))
             grey_data = cv2.cvtColor(numpy.array(raw_data), cv2.COLOR_BGR2GRAY)
@@ -195,12 +192,12 @@ def main():
         print("Please specify a name for the trained model")
         exit(1)
 
-    physical_devices = tf.config.experimental.list_physical_devices('GPU')
-    assert len(physical_devices) > 0, "No GPU available!"
-    tf.config.experimental.set_memory_growth(physical_devices[0], True)
+    # physical_devices = tf.config.experimental.list_physical_devices('GPU')
+    # assert len(physical_devices) > 0, "No GPU available!"
+    # tf.config.experimental.set_memory_growth(physical_devices[0], True)
 
-    with tf.device('/device:GPU:0'):
-    # with tf.device('/device:CPU:0'):
+    # with tf.device('/device:GPU:0'):
+    with tf.device('/device:CPU:0'):
     # with tf.device('/device:XLA_CPU:0'):
         model, predict_model = create_model(max_len, len(symbols))
 
@@ -230,7 +227,7 @@ def main():
         try:
             model.fit(training_data,
                       validation_data=validation_data,
-                      epochs=args.epocs,
+                      epochs=args.epochs,
                       callbacks=[callbacks],
                       workers=multiprocessing.cpu_count())
         except KeyboardInterrupt:
