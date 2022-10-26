@@ -33,5 +33,5 @@ tar xf images.tar
 ### Test on PI
 
 ```
-./predict_lite.py --model-name model.lite --captcha-dir images --captcha-csv images.csv --output output_lite.csv
+./predict_lite.py --model-name ./model-lite.h5 --captcha-dir images --captcha-csv images.csv --output output_lite.csv
 ```

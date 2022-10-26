@@ -157,7 +157,7 @@ class ImageSequence(keras.utils.Sequence):
         return self.cache[idx]
     
     def reset(self):
-        self.cache = [None for _ in range(self.n_batch)]
+        self.cache = [None for _ in range(self.count)]
     
     def on_epoch_end(self):
         random.shuffle(self.cache)

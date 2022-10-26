@@ -28,13 +28,13 @@ def decode_ctc_lite(logits, symbols):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model-name', help='Model name to use for classification', type=str)
+    parser.add_argument('--model', help='Model File to use for classification', type=str)
     parser.add_argument('--captcha-dir', help='Where to read the captchas to break', type=str)
     parser.add_argument('--captcha-csv', help='Where to read the captchas csv to break', type=str)
     parser.add_argument('--output', help='File where the classifications should be saved', type=str)
     args = parser.parse_args()
 
-    if args.model_name is None:
+    if args.model is None:
         print("Please specify the CNN model to use")
         exit(1)
 
@@ -50,7 +50,7 @@ def main():
         print("Please specify the path to the output file")
         exit(1)
     
-    interpreter = Interpreter(model_path=str(args.model_name))
+    interpreter = Interpreter(model_path=str(args.model))
     interpreter.allocate_tensors()
 
     input_details = interpreter.get_input_details()
@@ -60,7 +60,7 @@ def main():
 
     parent_path = os.path.abspath(args.captcha_dir)
 
-    df = pd.read_csv(args.capcha_csv, header=None, index_col=False, names=['filename'])[['filename']]
+    df = pd.read_csv(args.captcha_csv, header=None, index_col=False, names=['filename'])[['filename']]
     df['result'] = ''
 
     start_time = time.time()
