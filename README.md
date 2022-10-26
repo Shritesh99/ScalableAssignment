@@ -1,19 +1,37 @@
 # ScalableAssignment
 
-Scalable Computing Toy Project
+## Scalable Computing Project 2
+
+### Train and test on local
 
 ```
-./generate.py --width 128 --height 64 --length 5 --symbols symbols.txt --count 128000 --output-dir test
+./generate.py --count 256 --output-dir train
 
-```
-```
-./generate.py --width 128 --height 64 --length 5 --symbols symbols.txt --count 12800 --output-dir val
-```
-
-```
-./train.py --width 128 --height 64 --length 5 --symbols symbols.txt --batch-size 32 --epochs 100 --output-model test.h5 --train-dataset test --validate-dataset val
 ```
 
 ```
-./classify.py --model-name test.h5 --captcha-dir jamulkas-project1 --output result.csv --symbols symbols.txt
+./generate.py --count 16 --output-dir val
+```
+
+```
+./train.py --batch-size 32 --epochs 100 --output-model model --train-dataset train --validate-dataset val
+```
+
+```
+rm -r output.csv
+tar xf images.tar
+```
+
+```
+./classify.py --model-name model --captcha-dir images  --captcha-csv images.csv --output output.csv
+```
+
+```
+./generate_lite_model.py --model-name model --output model.lite
+```
+
+### Test on PI
+
+```
+./predict_lite.py --model-name model.lite --captcha-dir images --captcha-csv images.csv --output output_lite.csv
 ```

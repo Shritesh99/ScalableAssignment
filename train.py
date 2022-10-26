@@ -10,100 +10,170 @@ import numpy
 import string
 import random
 import argparse
+import multiprocessing
 import tensorflow as tf
-import tensorflow.keras as keras
+from tensorflow import keras
+from tensorflow.keras import layers
 
-# Build a Keras model given some parameters
-def create_model(captcha_length, captcha_num_symbols, input_shape, model_depth=5, module_size=2):
-  input_tensor = keras.Input(input_shape)
-  x = input_tensor
-  for i, module_length in enumerate([module_size] * model_depth):
-      for j in range(module_length):
-          x = keras.layers.Conv2D(32*2**min(i, 3), kernel_size=3, padding='same', kernel_initializer='he_uniform')(x)
-          x = keras.layers.BatchNormalization()(x)
-          x = keras.layers.Activation('relu')(x)
-      x = keras.layers.MaxPooling2D(2)(x)
+symbols_file = open('symbols.txt', 'r')
+symbols = ' ' + ''.join(sorted(symbols_file.readline().strip('\n')))
+symbols_file.close()
 
-  x = keras.layers.Flatten()(x)
-  x = [keras.layers.Dense(captcha_num_symbols, activation='softmax', name='char_%d'%(i+1))(x) for i in range(captcha_length)]
-  model = keras.Model(inputs=input_tensor, outputs=x)
+lens = list(range(1, 7))
+max_len = 8
 
-  return model
+height, width = 64, 128
 
-# A Sequence represents a dataset for training in Keras
-# In this case, we have a folder full of images
-# Elements of a Sequence are *batches* of images, of some size batch_size
+decode_label = lambda s: ''.join([symbols[x] for x in s[:s.index(0)]])
+encode_label = lambda s: [symbols.find(x) for x in s.ljust(max_len)]
+
+class CTCLayer(layers.Layer):
+    def __init__(self, name=None):
+        super().__init__(name=name)
+        self.loss_fn = keras.backend.ctc_batch_cost
+
+    def call(self, y_true, y_pred):
+        batch_len = tf.cast(tf.shape(y_true)[0], dtype="int64")
+
+        input_length = tf.cast(tf.shape(y_pred)[1], dtype="int64")
+        input_length = input_length * tf.ones(shape=(batch_len, 1), dtype="int64")
+
+        label_length = tf.cast(tf.shape(y_true)[1], dtype="int64")
+        label_length = label_length * tf.ones(shape=(batch_len, 1), dtype="int64")
+
+        loss = self.loss_fn(y_true, y_pred, input_length, label_length)
+        self.add_loss(loss)
+
+        return loss
+
+def create_model(len_max, n_symbols):
+    input = layers.Input(shape=(width, height, 1), name="image", dtype="float32")
+    label = layers.Input(name="label", shape=(len_max,), dtype="int64")
+
+    x = input
+    
+    x = layers.Conv2D(64, (3, 3), padding='same', name='conv1', kernel_initializer='he_normal')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Activation('relu')(x)
+    x = layers.MaxPooling2D(pool_size=(2, 2), name='max1')(x)
+
+    x = layers.Conv2D(128, (3, 3), padding='same', name='conv2', kernel_initializer='he_normal')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Activation('relu')(x)
+    x = layers.MaxPooling2D(pool_size=(2, 2), name='max2')(x)
+
+    x = layers.Conv2D(256, (3, 3), padding='same', name='conv3', kernel_initializer='he_normal')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Activation('relu')(x)
+    x = layers.Conv2D(256, (3, 3), padding='same', name='conv4', kernel_initializer='he_normal')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Activation('relu')(x)
+    x = layers.MaxPooling2D(pool_size=(1, 2), name='max3')(x)
+
+    x = layers.Conv2D(512, (3, 3), padding='same', name='conv5', kernel_initializer='he_normal')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Activation('relu')(x)
+    x = layers.Conv2D(512, (3, 3), padding='same', name='conv6')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Activation('relu')(x)
+    x = layers.MaxPooling2D(pool_size=(1, 2), name='max4')(x)
+
+    x = layers.Conv2D(512, (2, 2), padding='same', kernel_initializer='he_normal', name='con7')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Activation('relu')(x)
+    
+    model = keras.Model(input, x, name='cnn')
+    x = model(input)
+
+    conv_shape = x.get_shape()
+    x = layers.Reshape((int(conv_shape[1]), int(conv_shape[3] * conv_shape[2])))(x)
+
+    x = layers.Dense(32)(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Activation('relu')(x)
+    x = layers.Dropout(0.25)(x)
+
+    rnn_size = 128
+
+    x = layers.Bidirectional(layers.GRU(rnn_size, kernel_initializer='he_normal', return_sequences=True))(x)
+    x = layers.Bidirectional(layers.GRU(rnn_size, kernel_initializer='he_normal', return_sequences=True))(x)
+
+    x = layers.Dropout(0.25)(x)
+    x = layers.Dense(n_symbols + 1, kernel_initializer='he_normal', activation='softmax')(x)
+
+    predict_model = keras.Model(input, x)
+
+    loss_out = CTCLayer(name='ctc_loss')(label, x)
+
+    model = keras.Model(inputs=[input, label], outputs=loss_out)
+    model.compile(optimizer=keras.optimizers.Adam())
+
+    return model, predict_model
+
 class ImageSequence(keras.utils.Sequence):
-    def __init__(self, directory_name, batch_size, captcha_length, captcha_symbols, captcha_width, captcha_height):
+    def __init__(self, directory_name, batch_size):
         self.directory_name = directory_name
         self.batch_size = batch_size
-        self.captcha_length = captcha_length
-        self.captcha_symbols = captcha_symbols
-        self.captcha_width = captcha_width
-        self.captcha_height = captcha_height
+        self.captcha_symbols = symbols
+        self.captcha_width = width
+        self.captcha_height = height
 
         file_list = os.listdir(self.directory_name)
         self.files = dict(zip(map(lambda x: x.split('.')[0], file_list), file_list))
         self.used_files = []
         self.count = len(file_list)
+        self.cache = [None for _ in range(self.count)]
 
     def __len__(self):
-        return int(numpy.floor(self.count / self.batch_size)) - 1
+        return self.count
+    def __getitem__(self, idx):
+
+        if self.cache[idx] != None:
+            return self.cache[idx]
 
     def __getitem__(self, idx):
-        X = numpy.zeros((self.batch_size, self.captcha_height, self.captcha_width, 3), dtype=numpy.float32)
-        y = [numpy.zeros((self.batch_size, len(self.captcha_symbols)), dtype=numpy.uint8) for i in range(self.captcha_length)]
+        X = numpy.zeros((self.batch_size, self.captcha_width, self.captcha_height, 1), dtype=numpy.float32)
+        y = numpy.zeros((self.batch_size, max_len,), dtype=numpy.int64)
 
         for i in range(self.batch_size):
             random_image_label = random.choice(list(self.files.keys()))
             random_image_file = self.files[random_image_label]
 
-            # We've used this image now, so we can't repeat it in this iteration
             self.used_files.append(self.files.pop(random_image_label))
 
-            # We have to scale the input pixel values to the range [0, 1] for
-            # Keras so we divide by 255 since the image is 8-bit RGB
             raw_data = cv2.imread(os.path.join(self.directory_name, random_image_file))
-            rgb_data = cv2.cvtColor(raw_data, cv2.COLOR_BGR2RGB)
-            processed_data = numpy.array(rgb_data) / 255.0
+            grey_data = cv2.cvtColor(numpy.array(raw_data), cv2.COLOR_BGR2GRAY)
+            processed_data = grey_data / 255.0
+            processed_data = numpy.expand_dims(processed_data, axis=-1)
+            processed_data = processed_data.transpose(1, 0, 2)
             X[i] = processed_data
 
-            # We have a little hack here - we save captchas as TEXT_num.png if there is more than one captcha with the text "TEXT"
-            # So the real label should have the "_num" stripped out.
-
             random_image_label = random_image_label.split('_')[0]
+            
+            y[i] = encode_label(random_image_label)
 
-            for j, ch in enumerate(random_image_label):
-                y[j][i, :] = 0
-                y[j][i, self.captcha_symbols.find(ch)] = 1
+        self.cache[idx] = {
+            "image": X, 
+            "label": y,
+        }
 
-        return X, y
+        return self.cache[idx]
+    
+    def reset(self):
+        self.cache = [None for _ in range(self.n_batch)]
+    
+    def on_epoch_end(self):
+        random.shuffle(self.cache)
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--width', help='Width of captcha image', type=int)
-    parser.add_argument('--height', help='Height of captcha image', type=int)
-    parser.add_argument('--length', help='Length of captchas in characters', type=int)
     parser.add_argument('--batch-size', help='How many images in training captcha batches', type=int)
     parser.add_argument('--train-dataset', help='Where to look for the training image dataset', type=str)
     parser.add_argument('--validate-dataset', help='Where to look for the validation image dataset', type=str)
     parser.add_argument('--output-model-name', help='Where to save the trained model', type=str)
     parser.add_argument('--input-model', help='Where to look for the input model to continue training', type=str)
     parser.add_argument('--epochs', help='How many training epochs to run', type=int)
-    parser.add_argument('--symbols', help='File with the symbols to use in captchas', type=str)
     args = parser.parse_args()
-
-    if args.width is None:
-        print("Please specify the captcha image width")
-        exit(1)
-
-    if args.height is None:
-        print("Please specify the captcha image height")
-        exit(1)
-
-    if args.length is None:
-        print("Please specify the captcha length")
-        exit(1)
 
     if args.batch_size is None:
         print("Please specify the training batch size")
@@ -125,14 +195,6 @@ def main():
         print("Please specify a name for the trained model")
         exit(1)
 
-    if args.symbols is None:
-        print("Please specify the captcha symbols file")
-        exit(1)
-
-    captcha_symbols = None
-    with open(args.symbols) as symbols_file:
-        captcha_symbols = symbols_file.readline()
-
     physical_devices = tf.config.experimental.list_physical_devices('GPU')
     assert len(physical_devices) > 0, "No GPU available!"
     tf.config.experimental.set_memory_growth(physical_devices[0], True)
@@ -140,37 +202,40 @@ def main():
     with tf.device('/device:GPU:0'):
     # with tf.device('/device:CPU:0'):
     # with tf.device('/device:XLA_CPU:0'):
-        model = create_model(args.length, len(captcha_symbols), (args.height, args.width, 3))
+        model, predict_model = create_model(max_len, len(symbols))
 
-        if args.input_model is not None:
-            model.load_weights(args.input_model)
+        checkpoint = args.input_model
+        if checkpoint is not None:
+            model.load_weights(checkpoint)
 
-        model.compile(loss='categorical_crossentropy',
-                      optimizer=keras.optimizers.Adam(1e-3, amsgrad=True),
-                      metrics=['accuracy'])
+        # model.compile(loss='categorical_crossentropy',
+        #               optimizer=keras.optimizers.Adam(1e-3, amsgrad=True),
+        #               metrics=['accuracy'])
 
         model.summary()
+        predict_model.summary()
 
-        training_data = ImageSequence(args.train_dataset, args.batch_size, args.length, captcha_symbols, args.width, args.height)
-        validation_data = ImageSequence(args.validate_dataset, args.batch_size, args.length, captcha_symbols, args.width, args.height)
+        callbacks = [
+            keras.callbacks.EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True),
+            keras.callbacks.ModelCheckpoint(args.output_model_name+'.h5', save_best_only=False)
+        ]
 
-        callbacks = [keras.callbacks.EarlyStopping(patience=3),
-                     # keras.callbacks.CSVLogger('log.csv'),
-                     keras.callbacks.ModelCheckpoint(args.output_model_name+'.h5', save_best_only=False)]
+        training_data = ImageSequence(args.train_dataset, args.batch_size)
+        validation_data = ImageSequence(args.validate_dataset, args.batch_size)
 
         # Save the model architecture to JSON
         with open(args.output_model_name+".json", "w") as json_file:
             json_file.write(model.to_json())
 
         try:
-            model.fit_generator(generator=training_data,
-                                validation_data=validation_data,
-                                epochs=args.epochs,
-                                callbacks=callbacks,
-                                use_multiprocessing=True)
+            model.fit(training_data,
+                      validation_data=validation_data,
+                      epochs=args.epocs,
+                      callbacks=[callbacks],
+                      workers=multiprocessing.cpu_count())
         except KeyboardInterrupt:
             print('KeyboardInterrupt caught, saving current weights as ' + args.output_model_name+'_resume.h5')
-            model.save_weights(args.output_model_name+'_resume.h5')
+            model.save(args.output_model_name+'_resume.h5')
 
 if __name__ == '__main__':
     main()
