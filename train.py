@@ -223,6 +223,10 @@ def main():
         # Save the model architecture to JSON
         with open(args.output_model_name+".json", "w") as json_file:
             json_file.write(model.to_json())
+        
+        with open(args.output_model_name+"-predict.json", "w") as json_file:
+            json_file.write(predict_model.to_json())
+            predict_model.save(args.output_model_name+'-predict.h5')
 
         try:
             model.fit(training_data,
